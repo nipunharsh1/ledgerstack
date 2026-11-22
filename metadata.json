@@ -1,0 +1,6 @@
+{
+  "name": "LedgerStack",
+  "description": "Clean financial management dashboard for software solutions companies tracking revenue, operational costs, and profitability in LKR (Rs.).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
