@@ -13,6 +13,15 @@ import {
   formatMonthLabel,
   getTodayISO,
 } from './utils/formatters';
+import {
+  subscribeToTransactions,
+  addTransactionToFirestore,
+  updateTransactionInFirestore,
+  deleteTransactionFromFirestore,
+  restoreTransactionsToFirestore,
+  clearAllTransactionsInFirestore,
+  resetSampleDataInFirestore,
+} from './services/transactionService';
 
 interface ToastState {
   message: string;
@@ -45,6 +54,7 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>(
     loadInitialTransactions
   );
+  const [isCloudConnected, setIsCloudConnected] = useState(true);
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>({
     mode: 'all',
     month: '',
@@ -62,13 +72,21 @@ export default function App() {
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
+  // Subscribe to real-time updates from Firebase Firestore
   useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
-    } catch {
-      // Ignore storage quota errors cleanly
-    }
-  }, [transactions]);
+    const unsubscribe = subscribeToTransactions(
+      (remoteTransactions) => {
+        setTransactions(remoteTransactions);
+        setIsCloudConnected(true);
+      },
+      (error) => {
+        console.warn('Firebase connection issue, running in local fallback mode:', error);
+        setIsCloudConnected(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
 
   const showToast = (nextToast: ToastState) => {
     if (toastTimerRef.current) {
@@ -193,62 +211,87 @@ export default function App() {
     }
   };
 
-  const handleAddTransaction = (newTx: Omit<Transaction, 'id'>) => {
-    const id =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? `tx-${crypto.randomUUID()}`
-        : `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const handleAddTransaction = async (newTx: Omit<Transaction, 'id'>) => {
+    try {
+      await addTransactionToFirestore(newTx);
+      const matchesCurrentPeriod =
+        periodFilter.mode === 'all' ||
+        (periodFilter.mode === 'month' &&
+          newTx.date.startsWith(periodFilter.month)) ||
+        (periodFilter.mode === 'custom' &&
+          (!periodFilter.startDate || newTx.date >= periodFilter.startDate) &&
+          (!periodFilter.endDate || newTx.date <= periodFilter.endDate));
 
-    const created: Transaction = { ...newTx, id };
-    setTransactions((prev) => [created, ...prev]);
-
-    // If active month filter doesn't match the newly added transaction's month, inform user clearly
-    const matchesCurrentPeriod =
-      periodFilter.mode === 'all' ||
-      (periodFilter.mode === 'month' &&
-        created.date.startsWith(periodFilter.month)) ||
-      (periodFilter.mode === 'custom' &&
-        (!periodFilter.startDate || created.date >= periodFilter.startDate) &&
-        (!periodFilter.endDate || created.date <= periodFilter.endDate));
-
-    showToast({
-      message: matchesCurrentPeriod
-        ? `${created.type === 'income' ? 'Income' : 'Expense'} added to ledger.`
-        : `Saved (${formatMonthLabel(created.date.slice(0, 7))}). Switch period to view it.`,
-    });
+      showToast({
+        message: matchesCurrentPeriod
+          ? `${newTx.type === 'income' ? 'Income' : 'Expense'} saved to Firebase.`
+          : `Saved to Firebase (${formatMonthLabel(newTx.date.slice(0, 7))}). Switch period to view it.`,
+      });
+    } catch (err) {
+      console.error('Error adding transaction to Firebase:', err);
+      const id =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? `tx-${crypto.randomUUID()}`
+          : `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const fallback: Transaction = { ...newTx, id };
+      setTransactions((prev) => [fallback, ...prev]);
+      showToast({ message: 'Saved locally (Firebase offline).' });
+    }
   };
 
-  const handleUpdateTransaction = (updated: Transaction) => {
-    setTransactions((prev) =>
-      prev.map((tx) => (tx.id === updated.id ? updated : tx))
-    );
-    showToast({ message: 'Transaction updated.' });
+  const handleUpdateTransaction = async (updated: Transaction) => {
+    try {
+      await updateTransactionInFirestore(updated);
+      showToast({ message: 'Transaction updated in Firebase.' });
+    } catch (err) {
+      console.error('Error updating transaction:', err);
+      setTransactions((prev) =>
+        prev.map((tx) => (tx.id === updated.id ? updated : tx))
+      );
+      showToast({ message: 'Updated locally.' });
+    }
   };
 
-  const handleDeleteTransaction = (id: string) => {
+  const handleDeleteTransaction = async (id: string) => {
     const target = transactions.find((tx) => tx.id === id);
     if (!target) return;
-    setTransactions((prev) => prev.filter((tx) => tx.id !== id));
-    showToast({
-      message: `Deleted "${target.title}".`,
-      undoTransactions: [target],
-    });
+    try {
+      await deleteTransactionFromFirestore(id);
+      showToast({
+        message: `Deleted "${target.title}".`,
+        undoTransactions: [target],
+      });
+    } catch (err) {
+      console.error('Error deleting transaction from Firebase:', err);
+      setTransactions((prev) => prev.filter((tx) => tx.id !== id));
+      showToast({
+        message: `Deleted locally.`,
+        undoTransactions: [target],
+      });
+    }
   };
 
-  const handleUndo = () => {
+  const handleUndo = async () => {
     if (!toast?.undoTransactions || toast.undoTransactions.length === 0) return;
     const restored = toast.undoTransactions;
-    setTransactions((prev) => [...restored, ...prev]);
+    try {
+      await restoreTransactionsToFirestore(restored);
+    } catch (err) {
+      console.error('Error undoing transaction:', err);
+      setTransactions((prev) => [...restored, ...prev]);
+    }
     setToast(null);
   };
 
-  const handleResetSampleData = () => {
-    const freshSamples = SAMPLE_TRANSACTIONS.map((tx) => ({ ...tx }));
-    setTransactions(freshSamples);
+  const handleResetSampleData = async () => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(freshSamples));
-    } catch {
-      // Ignore storage quota errors cleanly
+      await resetSampleDataInFirestore(transactions.map((t) => t.id));
+      showToast({ message: 'Sample software company data restored in Firebase.' });
+    } catch (err) {
+      console.error('Error resetting sample data in Firebase:', err);
+      const freshSamples = SAMPLE_TRANSACTIONS.map((tx) => ({ ...tx }));
+      setTransactions(freshSamples);
+      showToast({ message: 'Sample data restored locally.' });
     }
     setPeriodFilter({
       mode: 'all',
@@ -260,16 +303,23 @@ export default function App() {
     setTypeFilter('all');
     setConfirmAction(null);
     setResetCounter((c) => c + 1);
-    showToast({ message: 'Sample software company data restored.' });
   };
 
-  const handleClearAllData = () => {
+  const handleClearAllData = async () => {
     const previous = [...transactions];
-    setTransactions([]);
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
-    } catch {
-      // Ignore storage quota errors cleanly
+      await clearAllTransactionsInFirestore(transactions.map((t) => t.id));
+      showToast({
+        message: 'All transactions cleared from Firebase.',
+        undoTransactions: previous.length > 0 ? previous : undefined,
+      });
+    } catch (err) {
+      console.error('Error clearing transactions from Firebase:', err);
+      setTransactions([]);
+      showToast({
+        message: 'All transactions cleared locally.',
+        undoTransactions: previous.length > 0 ? previous : undefined,
+      });
     }
     setPeriodFilter({
       mode: 'all',
@@ -281,10 +331,6 @@ export default function App() {
     setTypeFilter('all');
     setConfirmAction(null);
     setResetCounter((c) => c + 1);
-    showToast({
-      message: 'All transactions cleared.',
-      undoTransactions: previous.length > 0 ? previous : undefined,
-    });
   };
 
   const handleExportCSV = () => {
@@ -322,7 +368,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col">
-      <TopBar onNewEntryClick={handleFocusNewEntry} />
+      <TopBar
+        onNewEntryClick={handleFocusNewEntry}
+        isCloudConnected={isCloudConnected}
+      />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-7 space-y-6">
         {/* Workspace Title & Period / Reset Controls */}
@@ -520,7 +569,11 @@ export default function App() {
       <footer className="border-t border-slate-200 bg-white mt-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
           <span>LedgerStack · Financial Management for Software Teams</span>
-          <span>Data saved locally in browser · LKR (Rs.)</span>
+          <span>
+            {isCloudConnected
+              ? 'Real-time Cloud Sync with Firebase · LKR (Rs.)'
+              : 'Local Mode (Firebase Offline) · LKR (Rs.)'}
+          </span>
         </div>
       </footer>
 

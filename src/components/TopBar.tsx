@@ -1,19 +1,28 @@
-import { Plus } from 'lucide-react';
+import { Plus, Cloud } from 'lucide-react';
 
 interface TopBarProps {
   onNewEntryClick: () => void;
+  isCloudConnected?: boolean;
 }
 
-export function TopBar({ onNewEntryClick }: TopBarProps) {
+export function TopBar({ onNewEntryClick, isCloudConnected = true }: TopBarProps) {
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-slate-200">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-8">
-        <a
-          href="#overview"
-          className="font-display text-lg font-bold tracking-tight text-[#0F294A] whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8] rounded-sm"
-        >
-          LedgerStack
-        </a>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <a
+            href="#overview"
+            className="font-display text-lg font-bold tracking-tight text-[#0F294A] whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8] rounded-sm"
+          >
+            LedgerStack
+          </a>
+          {isCloudConnected && (
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200/80 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Firebase Cloud</span>
+            </span>
+          )}
+        </div>
 
         <nav
           aria-label="Primary navigation"
@@ -39,7 +48,7 @@ export function TopBar({ onNewEntryClick }: TopBarProps) {
           </a>
         </nav>
 
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={onNewEntryClick}
