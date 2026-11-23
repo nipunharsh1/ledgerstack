@@ -21,6 +21,7 @@ import {
   restoreTransactionsToFirestore,
   clearAllTransactionsInFirestore,
   resetSampleDataInFirestore,
+  CLEARED_FLAG_KEY,
 } from './services/transactionService';
 
 interface ToastState {
@@ -30,10 +31,12 @@ interface ToastState {
 
 function loadInitialTransactions(): Transaction[] {
   try {
+    const wasCleared = window.localStorage.getItem(CLEARED_FLAG_KEY) === 'true';
+    if (wasCleared) return [];
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return SAMPLE_TRANSACTIONS;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return SAMPLE_TRANSACTIONS;
+    if (!Array.isArray(parsed) || parsed.length === 0) return [];
     return parsed.filter(
       (item): item is Transaction =>
         item &&
@@ -284,15 +287,9 @@ export default function App() {
   };
 
   const handleResetSampleData = async () => {
-    try {
-      await resetSampleDataInFirestore(transactions.map((t) => t.id));
-      showToast({ message: 'Sample software company data restored in Firebase.' });
-    } catch (err) {
-      console.error('Error resetting sample data in Firebase:', err);
-      const freshSamples = SAMPLE_TRANSACTIONS.map((tx) => ({ ...tx }));
-      setTransactions(freshSamples);
-      showToast({ message: 'Sample data restored locally.' });
-    }
+    const freshSamples = SAMPLE_TRANSACTIONS.map((tx) => ({ ...tx }));
+    setTransactions(freshSamples);
+
     setPeriodFilter({
       mode: 'all',
       month: '',
@@ -303,24 +300,21 @@ export default function App() {
     setTypeFilter('all');
     setConfirmAction(null);
     setResetCounter((c) => c + 1);
+
+    try {
+      await resetSampleDataInFirestore();
+      showToast({ message: 'Sample software company data restored.' });
+    } catch (err) {
+      console.error('Error resetting sample data in Firebase:', err);
+      showToast({ message: 'Sample data restored locally.' });
+    }
   };
 
   const handleClearAllData = async () => {
     const previous = [...transactions];
-    try {
-      await clearAllTransactionsInFirestore(transactions.map((t) => t.id));
-      showToast({
-        message: 'All transactions cleared from Firebase.',
-        undoTransactions: previous.length > 0 ? previous : undefined,
-      });
-    } catch (err) {
-      console.error('Error clearing transactions from Firebase:', err);
-      setTransactions([]);
-      showToast({
-        message: 'All transactions cleared locally.',
-        undoTransactions: previous.length > 0 ? previous : undefined,
-      });
-    }
+    // Clear UI state immediately
+    setTransactions([]);
+
     setPeriodFilter({
       mode: 'all',
       month: '',
@@ -331,6 +325,20 @@ export default function App() {
     setTypeFilter('all');
     setConfirmAction(null);
     setResetCounter((c) => c + 1);
+
+    try {
+      await clearAllTransactionsInFirestore();
+      showToast({
+        message: 'All transactions cleared.',
+        undoTransactions: previous.length > 0 ? previous : undefined,
+      });
+    } catch (err) {
+      console.error('Error clearing transactions from Firebase:', err);
+      showToast({
+        message: 'Cleared locally. (Note: check Firebase security rules).',
+        undoTransactions: previous.length > 0 ? previous : undefined,
+      });
+    }
   };
 
   const handleExportCSV = () => {

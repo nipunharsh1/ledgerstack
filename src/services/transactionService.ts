@@ -4,6 +4,7 @@ import {
   addDoc,
   setDoc,
   deleteDoc,
+  getDocs,
   onSnapshot,
   writeBatch,
   Unsubscribe,
@@ -13,7 +14,7 @@ import { Transaction } from '../types/finance';
 import { SAMPLE_TRANSACTIONS, STORAGE_KEY } from '../data/sampleTransactions';
 
 const COLLECTION_NAME = 'transactions';
-const CLEARED_FLAG_KEY = 'ledgerstack_explicitly_cleared';
+export const CLEARED_FLAG_KEY = 'ledgerstack_explicitly_cleared';
 
 /**
  * Listen to realtime updates from Firestore.
@@ -39,6 +40,9 @@ export function subscribeToTransactions(
             console.warn('Could not seed initial sample data to Firestore:', err);
           }
         }
+        try {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+        } catch {}
         onUpdate([]);
         return;
       }
@@ -133,34 +137,48 @@ export async function restoreTransactionsToFirestore(
 /**
  * Clear all transactions from Firestore.
  */
-export async function clearAllTransactionsInFirestore(
-  existingIds: string[]
-): Promise<void> {
+export async function clearAllTransactionsInFirestore(): Promise<void> {
   window.localStorage.setItem(CLEARED_FLAG_KEY, 'true');
-  const batch = writeBatch(db);
-  for (const id of existingIds) {
-    const docRef = doc(db, COLLECTION_NAME, id);
-    batch.delete(docRef);
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+  } catch {
+    // Ignore quota errors
   }
-  await batch.commit();
+
+  const colRef = collection(db, COLLECTION_NAME);
+  const snapshot = await getDocs(colRef);
+  if (!snapshot.empty) {
+    const batch = writeBatch(db);
+    snapshot.forEach((d) => {
+      batch.delete(d.ref);
+    });
+    await batch.commit();
+  }
 }
 
 /**
  * Reset Firestore database to initial sample data.
  */
-export async function resetSampleDataInFirestore(
-  existingIds: string[]
-): Promise<void> {
+export async function resetSampleDataInFirestore(): Promise<void> {
   window.localStorage.removeItem(CLEARED_FLAG_KEY);
-  const batch = writeBatch(db);
-
-  // Remove existing records
-  for (const id of existingIds) {
-    const docRef = doc(db, COLLECTION_NAME, id);
-    batch.delete(docRef);
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(SAMPLE_TRANSACTIONS));
+  } catch {
+    // Ignore quota errors
   }
 
-  // Insert default samples
+  const colRef = collection(db, COLLECTION_NAME);
+  const snapshot = await getDocs(colRef);
+  const batch = writeBatch(db);
+
+  // Remove existing records from Firestore
+  if (!snapshot.empty) {
+    snapshot.forEach((d) => {
+      batch.delete(d.ref);
+    });
+  }
+
+  // Insert default sample transactions
   for (const sample of SAMPLE_TRANSACTIONS) {
     const docRef = doc(db, COLLECTION_NAME, sample.id);
     const { id: _, ...data } = sample;
